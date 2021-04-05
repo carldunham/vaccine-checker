@@ -80,7 +80,7 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("terminating...")
+			fmt.Println("\nterminating...")
 			stop()
 			fmt.Println("done.")
 			exitFunc(0)
@@ -105,7 +105,7 @@ func validateParams() error {
 		ret = multierror.Append(ret, errMissingLongitude)
 	}
 
-	if viper.GetString("notification-url") == "" {
+	if !viper.GetBool("silent") && viper.GetString("notification-url") == "" {
 		ret = multierror.Append(ret, errMissingNotificationURL)
 	}
 
