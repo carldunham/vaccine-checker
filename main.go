@@ -23,7 +23,6 @@ const (
 	defaultNotificationURL    = "https://api.virtualbuttons.com/v1"
 	defaultNotificationMethod = "GET"
 	defaultCheckInterval      = 30 * time.Second
-	defaultTickInterval       = 5 * time.Minute
 	defaultDistanceKilometers = 10
 )
 
@@ -46,7 +45,6 @@ func main() {
 	pflag.String("notification-method", defaultNotificationMethod, "HTTP method to hit notification-url with")
 	pflag.StringSlice("notification-params", nil, "query params (or body params for POST) to send with notification")
 	pflag.Duration("check-interval", defaultCheckInterval, "how often to check")
-	pflag.Duration("tick-interval", defaultTickInterval, "how often to just give an alive message")
 	pflag.Bool("silent", false, "skip notification")
 
 	pflag.Parse()
@@ -80,7 +78,7 @@ func main() {
 	for {
 		select {
 		case <-ctx.Done():
-			fmt.Println("terminating...")
+			fmt.Println("\nterminating...")
 			stop()
 			fmt.Println("done.")
 			exitFunc(0)
@@ -88,8 +86,6 @@ func main() {
 			if err := check(ctx, location, distance); err != nil {
 				fmt.Fprintf(os.Stderr, "error checking sites, moving on: %v", err)
 			}
-		case <-time.After(viper.GetDuration("tick-interval")):
-			fmt.Println("tick")
 		}
 	}
 }
@@ -105,7 +101,7 @@ func validateParams() error {
 		ret = multierror.Append(ret, errMissingLongitude)
 	}
 
-	if viper.GetString("notification-url") == "" {
+	if !viper.GetBool("silent") && viper.GetString("notification-url") == "" {
 		ret = multierror.Append(ret, errMissingNotificationURL)
 	}
 
