@@ -49,6 +49,7 @@ func main() {
 	flags.Duration("notification-timeout", defaultNotificationTimeout, "request timeout for notifications")
 	flags.Duration("check-interval", defaultCheckInterval, "how often to check")
 	flags.Bool("silent", false, "skip notification")
+	flags.Bool("once", false, "only do one check and exit")
 
 	if err := flags.Parse(os.Args[1:]); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
@@ -96,6 +97,10 @@ func main() {
 	for {
 		if err := checker.Check(ctx); err != nil {
 			fmt.Fprintf(os.Stderr, "error checking sites, moving on: %v", err)
+		}
+
+		if viper.GetBool("once") {
+			quitter()
 		}
 
 		select {
