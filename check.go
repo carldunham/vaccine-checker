@@ -17,18 +17,44 @@ import (
 	"github.com/spf13/viper"
 )
 
+const (
+	metersPerKilometer = 1000.0
+)
+
 var (
 	errInvalidStatusReturned = errors.New("unexpected status returned")
 )
 
-func check(ctx context.Context, location orb.Point, distance float64) error {
+type Checker struct {
+	Location orb.Point
+	Distance float64
+
+	searchClient, notifyClient *http.Client
+
+	lastFound []*geojson.Feature
+}
+
+func NewChecker() *Checker {
+	return &Checker{
+		Location: orb.Point{viper.GetFloat64("longitude"), viper.GetFloat64("latitude")},
+		Distance: viper.GetFloat64("distance") * metersPerKilometer,
+		searchClient: &http.Client{
+			Timeout: viper.GetDuration("search-timeout"),
+		},
+		notifyClient: &http.Client{
+			Timeout: viper.GetDuration("notification-timeout"),
+		},
+	}
+}
+
+func (c *Checker) Check(ctx context.Context) error {
 	req, err := http.NewRequest(viper.GetString("search-method"), searchURL(), body())
 	if err != nil {
 		return fmt.Errorf("error creating request: %w", err)
 	}
 	fmt.Printf("\n*** Checking at %s ***\n\n", time.Now().Format(time.RFC1123))
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.searchClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("error fetching appointments: %v", err)
 	}
@@ -39,13 +65,16 @@ func check(ctx context.Context, location orb.Point, distance float64) error {
 	if err := json.NewDecoder(resp.Body).Decode(&fc); err != nil {
 		return err
 	}
-	return handle(ctx, location, distance, &fc)
+	return c.handle(ctx, &fc)
 }
 
-func handle(ctx context.Context, location orb.Point, distance float64, fc *geojson.FeatureCollection) error {
+// private functions
+
+func (c *Checker) handle(ctx context.Context, fc *geojson.FeatureCollection) error {
 	var (
 		available uint64
 		found     []*geojson.Feature
+		foundNew  []*geojson.Feature
 	)
 
 	for _, f := range fc.Features {
@@ -58,17 +87,62 @@ func handle(ctx context.Context, location orb.Point, distance float64, fc *geojs
 		}
 		available++
 
-		if geo.Distance(f.Geometry.(orb.Point), location) <= distance {
-			printFeature(f, location)
+		if geo.Distance(f.Geometry.(orb.Point), c.Location) <= c.Distance {
+			printFeature(f, c.Location)
 			found = append(found, f)
+
+			if !c.alreadyFound(f) {
+				foundNew = append(foundNew, f)
+			}
 		}
 	}
 	fmt.Printf("found %d nearby, out of %d available from %d locations.\n", len(found), available, len(fc.Features))
 
-	if len(found) > 0 {
-		notify(found)
+	if len(foundNew) > 0 {
+		c.notify(ctx, foundNew)
+	}
+	c.lastFound = found
+
+	return nil
+}
+
+func (c *Checker) alreadyFound(f *geojson.Feature) bool {
+	id := f.Properties.MustInt("id", -1)
+	if id == -1 {
+		return false // err on the side of reporting
 	}
 
+	for _, of := range c.lastFound {
+		if of.Properties.MustInt("id", id) == id { // ditto
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Checker) notify(ctx context.Context, found []*geojson.Feature) error {
+	if viper.GetBool("silent") {
+		return nil
+	}
+	req, err := http.NewRequest(viper.GetString("notification-method"), notificationURL(), body())
+	if err != nil {
+		return fmt.Errorf("error creating request: %w", err)
+	}
+	fmt.Printf("notifying at %s\n", time.Now().Format(time.RFC1123))
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("error notifying: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%w: %s", errInvalidStatusReturned, resp.Status)
+	}
+
+	if b, err := ioutil.ReadAll(resp.Body); err == nil {
+		fmt.Println(string(b))
+	}
 	return nil
 }
 
@@ -105,32 +179,6 @@ func mapString(m map[string]interface{}, key string, fallback interface{}) inter
 		return value
 	}
 	return fallback
-}
-
-func notify(found []*geojson.Feature) error {
-	if viper.GetBool("silent") {
-		return nil
-	}
-	req, err := http.NewRequest(viper.GetString("notification-method"), notificationURL(), body())
-	if err != nil {
-		return fmt.Errorf("error creating request: %w", err)
-	}
-	fmt.Printf("notifying at %s\n", time.Now().Format(time.RFC1123))
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("error notifying: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%w: %s", errInvalidStatusReturned, resp.Status)
-	}
-
-	if b, err := ioutil.ReadAll(resp.Body); err == nil {
-		fmt.Println(string(b))
-	}
-	return nil
 }
 
 func searchURL() string {
